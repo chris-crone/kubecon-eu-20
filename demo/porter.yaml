@@ -1,0 +1,114 @@
+# Installing this application will yield a simple Wordpress blog on an existing
+# Kubernetes cluster.
+# The process of installing involves:
+# - Creating a new namespace using Terraform
+# - Deploying Wordpress into this namespace using Helm
+
+# Application metadata.
+name: kubecon-eu-2020
+version: 0.1.0
+description: "KubeCon EU 2020 CNAB demo"
+tag: ccrone/kubecon-eu-2020:v0.1.0
+
+# Base Dockerfile used as a template for the CNAB installer.
+dockerfile: Dockerfile.tmpl
+
+# The tools that are required to deploy this application.
+# A list of mixins can be found here: https://porter.sh/mixins/
+mixins:
+  - terraform:
+      clientVersion: 0.13.0-rc1
+  - helm
+
+# Credentials are sensitive information required to deploy the application.
+# There is one set of credentials listed here as required for the application:
+# - A Kubernetes config file that is mounted to `/root/.kube/config` in the
+#   CNAB installer.
+credentials:
+  - name: kubeconfig
+    description: "Kubernetes config to use for creation of namespace and deployment of app"
+    path: /root/.kube/config
+
+# Parameters are user settings that are used to configure the application.
+# There are two parameters listed here:
+# - The Kubernetes context to use (default: docker-desktop)
+# - The Kubernetes namespace to create and use for this application
+#   (default: kubecon)
+parameters:
+  - name: context
+    description: "Context in the Kubernetes config to use"
+    type: string
+    default: "docker-desktop"
+  - name: namespace
+    description: "Kubernetes namespace to create and deploy app within"
+    type: string
+    default: "kubecon"
+
+# Outputs are collected from a stage in a CNAB action. This allows capturing
+# information from one stage (e.g.: a URL) and using it in another.
+# In this case we have a single output:
+# - namespace that is filled by the Terraform install step.
+outputs:
+  - name: namespace
+    description: "Kubernetes namespace created by Terraform"
+    type: string
+    applyTo:
+      - install # We will only fill this output in the install action.
+
+# The install action defines the steps required to install the application.
+# In this case, we start by creating a Kubernetes namespace using Terraform.
+# The name of the namespace is a parameter with a default value of "kubecon".
+# Once the namespace has been created, Helm is used to install Wordpress into
+# the namespace. Note that the Terraform step outputs the namespace name and
+# that this is used by the Helm step.
+install:
+  - terraform:
+      description: "Create application Kubernetes namespace"
+      backendConfig:
+        # Configure the Terraform backend to use a Kubernetes secret for state
+        # with the bundle name as its prefix.
+        secret_suffix: "{{ bundle.name }}"
+      vars:
+        context: "{{ bundle.parameters.context }}"
+        namespace: "{{ bundle.parameters.namespace }}"
+      outputs:
+        - name: namespace
+  - helm:
+      description: "Install Wordpress"
+      name: "{{ bundle.name }}"
+      # See: https://github.com/deislabs/porter-terraform/issues/20
+      # namespace: "{{ bundle.outputs.namespace }}"
+      namespace: "{{ bundle.parameters.namespace }}"
+      chart: stable/wordpress
+      replace: true
+
+# The upgrade action simply uses Helm to upgrade Wordpress to the latest stable
+# version.
+upgrade:
+  - helm:
+      description: "Upgrade Wordpress"
+      name: "{{ bundle.name }}"
+      # See: https://github.com/deislabs/porter-terraform/issues/20
+      # namespace: "{{ bundle.outputs.namespace }}"
+      namespace: "{{ bundle.parameters.namespace }}"
+      chart: stable/wordpress
+
+# The uninstall action starts by using Helm to remove Wordpress and then uses
+# Terraform to remove the namespace we created.
+uninstall:
+  - helm:
+      description: "Uninstall Wordpress"
+      purge: true
+      releases:
+        - "{{ bundle.name }}"
+  - terraform:
+      description: "Remove application Kubernetes namespace"
+      backendConfig:
+        # Configure the Terraform backend to use a Kubernetes secret for state
+        # with the bundle name as its prefix.
+        secret_suffix: "{{ bundle.name }}"
+      vars:
+        context: "{{ bundle.parameters.context }}"
+        # See: https://github.com/deislabs/porter-terraform/issues/20
+        # namespace: "{{ bundle.outputs.namespace }}"
+        namespace: "{{ bundle.parameters.namespace }}"
